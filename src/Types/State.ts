@@ -14,6 +14,30 @@ export enum SyncState {
 
 export type WAConnectionState = 'open' | 'connecting' | 'close'
 
+/**
+ * Describes why a connection was closed.
+ * Emitted as `closeReason` in the `connection.update` event when `connection === 'close'`.
+ */
+export type ConnectionCloseReason =
+	/** keep-alive ping threshold exceeded — network likely down */
+	| 'keepAlive'
+	/** circuit breaker: too many consecutive query timeouts */
+	| 'circuitBreaker'
+	/** server closed the WebSocket or XML stream */
+	| 'serverTerminated'
+	/** WhatsApp sent a stream:error or failure stanza */
+	| 'streamError'
+	/** WebSocket transport-level error */
+	| 'wsError'
+	/** intentional logout */
+	| 'loggedOut'
+	/** error during device pairing */
+	| 'pairingError'
+	/** QR code ref list exhausted (scan timeout) */
+	| 'qrTimeout'
+	/** generic connection-level error on open */
+	| 'connectionError'
+
 export type ConnectionState = {
 	/** connection is now open, connecting or closed */
 	connection: WAConnectionState
@@ -24,6 +48,9 @@ export type ConnectionState = {
 		error: Boom | Error | undefined
 		date: Date
 	}
+
+	/** semantic reason the connection was closed; only present when `connection === 'close'` */
+	closeReason?: ConnectionCloseReason
 	/** is this a new login */
 	isNewLogin?: boolean
 	/** the current QR code */

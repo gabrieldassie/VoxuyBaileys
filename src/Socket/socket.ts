@@ -14,6 +14,7 @@ import {
 	UPLOAD_TIMEOUT
 } from '../Defaults'
 import {
+	type ConnectionCloseReason,
 	type LIDMapping,
 	type NewChatMessageCapInfo,
 	QueryIds,
@@ -205,10 +206,7 @@ export const makeSocket = (config: SocketConfig) => {
 			// Catch timeout and return undefined instead of throwing
 			if (error instanceof Boom && error.output?.statusCode === DisconnectReason.timedOut) {
 				consecutiveTimeouts++
-				logger?.warn?.(
-					{ msgId, consecutiveTimeouts, useProxy, timeoutMs },
-					'timed out waiting for message'
-				)
+				logger?.warn?.({ msgId, consecutiveTimeouts, useProxy, timeoutMs }, 'timed out waiting for message')
 
 				// Circuit breaker: if too many consecutive timeouts, force reconnection
 				if (maxConsecutiveTimeouts > 0 && consecutiveTimeouts >= maxConsecutiveTimeouts) {
@@ -219,7 +217,8 @@ export const makeSocket = (config: SocketConfig) => {
 					void end(
 						new Boom('Too many consecutive timeouts', {
 							statusCode: DisconnectReason.connectionLost
-						})
+						}),
+						'circuitBreaker'
 					)
 				}
 
@@ -244,9 +243,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 		const msgId = node.attrs.id
 		// Apply proxy multiplier to explicit timeouts as well
-		const resolvedTimeout = timeoutMs
-			? Math.round(timeoutMs * proxyMultiplier)
-			: effectiveQueryTimeoutMs
+		const resolvedTimeout = timeoutMs ? Math.round(timeoutMs * proxyMultiplier) : effectiveQueryTimeoutMs
 
 		const result = await promiseTimeout<any>(resolvedTimeout, async (resolve, reject) => {
 			const result = waitForMessage(msgId, resolvedTimeout).catch(reject)
@@ -652,14 +649,16 @@ export const makeSocket = (config: SocketConfig) => {
 		})
 	}
 
-	const end = async (error: Error | undefined) => {
+	const end = async (error: Error | undefined, closeReason?: ConnectionCloseReason) => {
 		if (closed) {
 			logger.trace({ trace: error?.stack }, 'connection already closed')
 			return
 		}
 
 		closed = true
-		logger.info({ trace: error?.stack }, error ? 'connection errored' : 'connection closed')
+
+		const statusCode = (error as any)?.output?.statusCode
+		logger.info({ trace: error?.stack, statusCode, closeReason }, error ? 'connection errored' : 'connection closed')
 
 		clearInterval(keepAliveReq)
 		clearTimeout(qrTimer)
@@ -689,7 +688,8 @@ export const makeSocket = (config: SocketConfig) => {
 			lastDisconnect: {
 				error,
 				date: new Date()
-			}
+			},
+			closeReason
 		})
 		ev.removeAllListeners('connection.update')
 		ev.destroy()
@@ -720,8 +720,8 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const startKeepAliveRequest = () => {
-		// Adaptive keepalive threshold: add extra tolerance when using a proxy
-		const keepAliveGraceMs = useProxy ? Math.round(5000 * proxyMultiplier) : 5000
+		// Adaptive keepalive threshold: 30% of the interval, with proxy multiplier applied
+		const keepAliveGraceMs = Math.round(keepAliveIntervalMs * 0.3 * (useProxy ? proxyMultiplier : 1))
 		return (keepAliveReq = setInterval(() => {
 			if (!lastDateRecv) {
 				lastDateRecv = new Date()
@@ -733,7 +733,7 @@ export const makeSocket = (config: SocketConfig) => {
 				it could be that the network is down
 			*/
 			if (diff > keepAliveIntervalMs + keepAliveGraceMs) {
-				void end(new Boom('Connection was lost', { statusCode: DisconnectReason.connectionLost }))
+				void end(new Boom('Connection was lost', { statusCode: DisconnectReason.connectionLost }), 'keepAlive')
 			} else if (ws.isOpen) {
 				// if its all good, send a keep alive request
 				query({
@@ -753,6 +753,7 @@ export const makeSocket = (config: SocketConfig) => {
 			}
 		}, keepAliveIntervalMs))
 	}
+
 	/** i have no idea why this exists. pls enlighten me */
 	const sendPassiveIq = (tag: 'passive' | 'active') =>
 		query({
@@ -789,7 +790,7 @@ export const makeSocket = (config: SocketConfig) => {
 			})
 		}
 
-		void end(new Boom(msg || 'Intentional Logout', { statusCode: DisconnectReason.loggedOut }))
+		void end(new Boom(msg || 'Intentional Logout', { statusCode: DisconnectReason.loggedOut }), 'loggedOut')
 	}
 
 	const requestPairingCode = async (phoneNumber: string, customPairingCode?: string): Promise<string> => {
@@ -889,15 +890,28 @@ export const makeSocket = (config: SocketConfig) => {
 			await validateConnection()
 		} catch (err: any) {
 			logger.error({ err }, 'error in validating connection')
-			void end(err)
+			void end(err, 'connectionError')
 		}
 	})
-	ws.on('error', mapWebSocketError(end))
-	ws.on('close', () => void end(new Boom('Connection Terminated', { statusCode: DisconnectReason.connectionClosed })))
+	ws.on('error', (error: Error) => {
+		void end(
+			new Boom(`WebSocket Error (${error?.message})`, { statusCode: getCodeFromWSError(error), data: error }),
+			'wsError'
+		)
+	})
+	ws.on(
+		'close',
+		() =>
+			void end(new Boom('Connection Terminated', { statusCode: DisconnectReason.connectionClosed }), 'serverTerminated')
+	)
 	// the server terminated the connection
 	ws.on(
 		'CB:xmlstreamend',
-		() => void end(new Boom('Connection Terminated by Server', { statusCode: DisconnectReason.connectionClosed }))
+		() =>
+			void end(
+				new Boom('Connection Terminated by Server', { statusCode: DisconnectReason.connectionClosed }),
+				'serverTerminated'
+			)
 	)
 	// QR gen
 	ws.on('CB:iq,type:set,pair-device', async (stanza: BinaryNode) => {
@@ -925,7 +939,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 			const refNode = refNodes.shift()
 			if (!refNode) {
-				void end(new Boom('QR refs attempts ended', { statusCode: DisconnectReason.timedOut }))
+				void end(new Boom('QR refs attempts ended', { statusCode: DisconnectReason.timedOut }), 'qrTimeout')
 				return
 			}
 
@@ -960,7 +974,7 @@ export const makeSocket = (config: SocketConfig) => {
 			void sendUnifiedSession()
 		} catch (error: any) {
 			logger.info({ trace: error.stack }, 'error in pairing')
-			void end(error)
+			void end(error, 'pairingError')
 		}
 	})
 	// login complete
@@ -1022,16 +1036,19 @@ export const makeSocket = (config: SocketConfig) => {
 
 		const { reason, statusCode } = getErrorCodeFromStreamError(node)
 
-		void end(new Boom(`Stream Errored (${reason})`, { statusCode, data: reasonNode || node }))
+		void end(new Boom(`Stream Errored (${reason})`, { statusCode, data: reasonNode || node }), 'streamError')
 	})
 	// stream fail, possible logout
 	ws.on('CB:failure', (node: BinaryNode) => {
 		const reason = +(node.attrs.reason || 500)
-		void end(new Boom('Connection Failure', { statusCode: reason, data: node.attrs }))
+		void end(new Boom('Connection Failure', { statusCode: reason, data: node.attrs }), 'streamError')
 	})
 
 	ws.on('CB:ib,,downgrade_webclient', () => {
-		void end(new Boom('Multi-device beta not joined', { statusCode: DisconnectReason.multideviceMismatch }))
+		void end(
+			new Boom('Multi-device beta not joined', { statusCode: DisconnectReason.multideviceMismatch }),
+			'streamError'
+		)
 	})
 
 	ws.on('CB:ib,,offline_preview', async (node: BinaryNode) => {
