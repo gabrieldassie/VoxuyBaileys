@@ -720,7 +720,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	const startKeepAliveRequest = () => {
-		// Adaptive keepalive threshold: 30% of the interval, with proxy multiplier applied
+		// Adaptive keep-alive threshold: 30% of the interval, with proxy multiplier applied
 		const keepAliveGraceMs = Math.round(keepAliveIntervalMs * 0.3 * (useProxy ? proxyMultiplier : 1))
 		return (keepAliveReq = setInterval(() => {
 			if (!lastDateRecv) {
