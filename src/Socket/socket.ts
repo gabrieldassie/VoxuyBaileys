@@ -633,7 +633,10 @@ export const makeSocket = (config: SocketConfig) => {
 				logger.info(`PreKey validation passed - Server: ${preKeyCount}, Current prekey ${currentPreKeyId} exists`)
 			}
 		} catch (error) {
-			logger.error({ error }, 'Failed to check/upload pre-keys during initialization')
+			logger.error(
+				{ message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined },
+				'Failed to check/upload pre-keys during initialization'
+			)
 			// Don't throw - allow connection to continue even if pre-key check fails
 		}
 	}
@@ -1197,7 +1200,10 @@ export const makeSocket = (config: SocketConfig) => {
 		try {
 			await sendNode(node)
 		} catch (error) {
-			logger.debug({ error }, 'failed to send unified_session telemetry')
+			logger.debug(
+				{ message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined },
+				'failed to send unified_session telemetry'
+			)
 		}
 	}
 

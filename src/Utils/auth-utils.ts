@@ -333,7 +333,10 @@ export const addTransactionCapability = (
 
 						return result
 					} catch (error) {
-						logger.error({ error }, 'transaction failed, rolling back')
+						logger.error(
+							{ message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined },
+							'transaction failed, rolling back'
+						)
 						throw error
 					}
 				})

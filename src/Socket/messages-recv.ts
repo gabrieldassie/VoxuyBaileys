@@ -534,7 +534,10 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							await upsertMessage(fullMessage, 'append')
 							logger.debug('Processed plaintext newsletter message')
 						} catch (error) {
-							logger.error({ error }, 'Failed to decode plaintext newsletter message')
+							logger.error(
+								{ message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined },
+								'Failed to decode plaintext newsletter message'
+							)
 						}
 					}
 
