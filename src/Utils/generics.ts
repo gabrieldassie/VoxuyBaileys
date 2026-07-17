@@ -31,6 +31,10 @@ export const BufferJSON = {
 			return Buffer.from(value.data, 'base64')
 		}
 
+		if (typeof value === 'object' && value !== null && value.type === 'Buffer' && Array.isArray(value.data)) {
+			return Buffer.from(value.data)
+		}
+
 		if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
 			const keys = Object.keys(value)
 			if (keys.length > 0 && keys.every(k => !isNaN(parseInt(k, 10)))) {
