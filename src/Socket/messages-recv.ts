@@ -1970,6 +1970,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					{ msgId: attrs.id, from: attrs.from },
 					'error 463: account restricted or missing tctoken for contact'
 				)
+				await fetchAccountReachoutTimelock().catch(err => logger.warn({ err }, 'failed to fetch reachout timelock'))
 
 				const ackFrom = attrs.from
 				if (ackFrom && !inFlight463Recoveries.has(ackFrom)) {
@@ -2004,10 +2005,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					{ msgId: attrs.id, from: attrs.from },
 					'smax-invalid (479): stanza rejected by server — likely stale device session or malformed addressing'
 				)
-			} else if (isReachoutTimelocked) {
-				// user is temporarily restricted, fetch current restriction details
-				await fetchAccountReachoutTimelock().catch(err => logger.warn({ err }, 'failed to fetch reachout timelock'))
-				logger.warn({ attrs }, 'received error in ack')
 			} else {
 				logger.warn({ attrs }, 'received error in ack')
 			}
