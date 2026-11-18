@@ -109,6 +109,14 @@ export const makeSocket = (config: SocketConfig) => {
 	 */
 	const TIMEOUT_DEDUP_WINDOW_MS = 500
 
+	/**
+	 * Rejecters of every query currently waiting for a reply. `end()` removes the ws 'close'
+	 * listeners before closing the socket, so the per-query onErr never fires: without this,
+	 * a query in flight when the connection drops only settles after the full timeout
+	 * (3 min behind a proxy) and the caller stays blocked that whole time.
+	 */
+	const pendingQueryRejecters = new Set<(err: Error) => void>()
+
 	const publicWAMBuffer = new BinaryInfo()
 
 	let serverTimeOffsetMs = 0
@@ -218,6 +226,7 @@ export const makeSocket = (config: SocketConfig) => {
 				ws.on(`TAG:${msgId}`, onRecv)
 				ws.on('close', onErr)
 				ws.on('error', onErr)
+				pendingQueryRejecters.add(onErr)
 
 				return () => reject(new Boom('Query Cancelled'))
 			})
@@ -257,6 +266,7 @@ export const makeSocket = (config: SocketConfig) => {
 			if (onErr) {
 				ws.off('close', onErr)
 				ws.off('error', onErr)
+				pendingQueryRejecters.delete(onErr)
 			}
 		}
 	}
@@ -691,6 +701,13 @@ export const makeSocket = (config: SocketConfig) => {
 
 		clearTimeout(keepAliveReq)
 		clearTimeout(qrTimer)
+
+		// settle queries still waiting for a reply right away instead of leaving them to
+		// time out (the listeners that would reject them are removed just below)
+		for (const reject of [...pendingQueryRejecters]) {
+			reject(new Boom('Connection Closed', { statusCode: DisconnectReason.connectionClosed }))
+		}
+		pendingQueryRejecters.clear()
 
 		ws.removeAllListeners('close')
 		ws.removeAllListeners('open')
